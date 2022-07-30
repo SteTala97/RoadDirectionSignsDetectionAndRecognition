@@ -1,3 +1,7 @@
+# Copy-paste the images of the Mapillary Traffic Sign Detection Dataset which are
+# associated to an annotation file that has the field 'direction-or-information' 
+# equal to True.	
+
 import glob
 import json
 import sys
