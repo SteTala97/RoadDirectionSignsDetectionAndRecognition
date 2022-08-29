@@ -1,8 +1,8 @@
-# Convert annotation files from the original format of the Mapillary Traffic Sign 
-# Detection Dataset, which are stored as json files and the bounding box are
-# represented in a PascalVOC-like manner, to YOLO format.
-# Please note that only one class is considered, which implies no difference between
-# different types of traffic signs; this may change in future work.
+"""
+	Convert annotation files from the original format of the Mapillary TSD 
+	Dataset, which are stored as json files in which the bounding boxes are
+	represented in a PascalVOC-like manner, to YOLO format.
+"""
 
 import cv2 as cv
 import json
@@ -10,9 +10,9 @@ import glob
 
 
 ANNOTATION_FOLDER = 'D:/UNIVERSITA/Magistrale/SecondoAnno/Tesi/Datasets/MapillaryTrafficSignDetection/direction_or_information/'
-SHOW_ANNOTATIONS = False
-SAVE_ANNOTATION = True
-GET_LABELS = False
+SHOW_ANNOTATIONS = True
+SAVE_ANNOTATION = False
+GET_LABELS = True
 
 
 def main():
@@ -23,7 +23,7 @@ def main():
 		with open(annotation, 'r') as file:
 			data = json.load(file)
 
-		# get all the different road sign categorie, specified in the "label" field
+		# get all the different road sign categories, specified in the "label" field
 		if GET_LABELS:
 			labels = {}
 			for obj in data['objects']:
@@ -82,7 +82,8 @@ def main():
 		if SHOW_ANNOTATIONS:
 			cv.namedWindow("direction-or-information", cv.WINDOW_GUI_EXPANDED)
 			cv.imshow("direction-or-information", img)
-			cv.waitKey()
+			if 0xFF & cv.waitKey() == 27:
+				break
 			cv.destroyAllWindows()
 
 	# print all the different traffic sign labels present in the files considered
