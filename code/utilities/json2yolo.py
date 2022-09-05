@@ -9,10 +9,13 @@ import json
 import glob
 
 
-ANNOTATION_FOLDER = 'D:/UNIVERSITA/Magistrale/SecondoAnno/Tesi/Datasets/MapillaryTrafficSignDetection/direction_or_information/'
-SHOW_ANNOTATIONS = True
-SAVE_ANNOTATION = False
+
+# either on fully annotated data (FA) or partially annotated data (PA)
+ANNOTATION_FOLDER = 'D:/UNIVERSITA/Magistrale/SecondoAnno/Tesi/Datasets/MapillaryTrafficSignDetection/direction_or_information_FA/'
+SHOW_ANNOTATIONS = False
+SAVE_ANNOTATION = True
 GET_LABELS = True
+
 
 
 def main():
