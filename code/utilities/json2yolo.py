@@ -14,7 +14,7 @@ import glob
 ANNOTATION_FOLDER = 'D:/UNIVERSITA/Magistrale/SecondoAnno/Tesi/Datasets/MapillaryTrafficSignDetection/direction_or_information_FA/'
 SHOW_ANNOTATIONS = False
 SAVE_ANNOTATION = True
-GET_LABELS = True
+GET_LABELS = False
 
 
 
@@ -41,6 +41,7 @@ def main():
 
 		# get the coordinates for each bounding box
 		yolo_string = ""
+		obj_counter = 0
 		for obj in data['objects']:
 			# get bbox coordinates from file
 			x1 = int(obj['bbox']['xmin'])
@@ -63,9 +64,14 @@ def main():
 			height /= rows
 
 			# compose the final annotation string for the current object;
-			# the class index is always '0' (see the comment at the top of the file)
-			yolo_string += '0 ' + str(x_center) + ' ' + str(y_center) + ' ' + \
-								  str(width)    + ' ' + str(height)   + '\n'
+			# the class indexes are: 
+			# '0' (direction_or_information) : the traffic sign is a direction or information sign
+			# '1' (other) : the traffic sign is any other kind of traffic sign
+			class_idx = 0
+			if obj['properties']['direction-or-information'] == False:
+				class_idx = 1
+			yolo_string += f'{class_idx} ' + str(x_center) + ' ' + str(y_center) + ' ' + \
+								             str(width)    + ' ' + str(height)   + '\n'
 
 			# draw a bounding box around each object 
 			if SHOW_ANNOTATIONS:
