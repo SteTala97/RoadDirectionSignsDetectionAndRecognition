@@ -3,7 +3,8 @@ import json
 import os
 
 
-SRC_FOLDER = 'D:/UNIVERSITA/Magistrale/SecondoAnno/Tesi/Datasets/MapillaryTrafficSignDetection/direction_or_information/'
+# either on fully annotated data (FA) or partially annotated data (PA)
+SRC_FOLDER = 'D:/UNIVERSITA/Magistrale/SecondoAnno/Tesi/Datasets/MapillaryTrafficSignDetection/direction_or_information_FA/'
 
 
 def main():
@@ -13,7 +14,7 @@ def main():
 
 	n_removed = 0
 	for file in glob.glob(SRC_FOLDER + '*.json'):
-		if file[:-3]+'pg' not in to_keep:
+		if file[:-4]+'jpg' not in to_keep:
 			os.remove(file)
 			n_removed += 1
 			print(f" Files removed: {n_removed}")
