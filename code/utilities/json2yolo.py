@@ -2,6 +2,7 @@
 	Convert annotation files from the original format of the Mapillary TSD 
 	Dataset, which are stored as json files in which the bounding boxes are
 	represented in a PascalVOC-like manner, to YOLO format.
+	NOTE: both images and annotation files must be in the same folder
 """
 
 import cv2 as cv
@@ -10,10 +11,9 @@ import glob
 
 
 
-# either on fully annotated data (FA) or partially annotated data (PA)
-ANNOTATION_FOLDER = 'D:/UNIVERSITA/Magistrale/SecondoAnno/Tesi/Datasets/MapillaryTrafficSignDetection/direction_or_information_FA/'
-SHOW_ANNOTATIONS = False
-SAVE_ANNOTATION = True
+ANNOTATION_FOLDER = 'D:/UNIVERSITA/Magistrale/SecondoAnno/Tesi/Datasets/MapillaryTrafficSignDetection/direction_or_information/'
+SHOW_ANNOTATIONS = True
+SAVE_ANNOTATION = False
 GET_LABELS = False
 
 
@@ -37,11 +37,11 @@ def main():
 		rows = int(data['height'])
 
 		if SHOW_ANNOTATIONS:
-			img = cv.imread(annotation[:-3] + 'pg')
+			img = cv.imread(annotation[:-4] + 'jpg')
 
 		# get the coordinates for each bounding box
 		yolo_string = ""
-		obj_counter = 0
+		
 		for obj in data['objects']:
 			# get bbox coordinates from file
 			x1 = int(obj['bbox']['xmin'])
