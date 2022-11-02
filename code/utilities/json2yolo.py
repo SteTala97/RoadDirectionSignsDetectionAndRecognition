@@ -10,15 +10,13 @@ import json
 import glob
 
 
-
 ANNOTATION_FOLDER = 'D:/UNIVERSITA/Magistrale/SecondoAnno/Tesi/Datasets/MapillaryTrafficSignDetection/direction_or_information/'
 SHOW_ANNOTATIONS = True
 SAVE_ANNOTATION = False
 GET_LABELS = False
 
 
-
-def main():
+if __name__ == "__main__":
 	src_path = ANNOTATION_FOLDER + '*.json'
 	# do the following for each annotation file in the folder 'ANNOTATION_FOLDER'
 	for annotation in glob.glob(src_path):
@@ -100,7 +98,3 @@ def main():
 		print("")
 		for label in labels:
 			print(label)
-
-
-if __name__ == "__main__":
-	main()
