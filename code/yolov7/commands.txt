@@ -6,14 +6,11 @@
 ❎ Start Training: 
 python3 train.py --workers 8 --device 0 --weights '' --data data/MTSD-fully_annotated/MTSD-fully_annotated.yaml --batch-size 16 --img 640 640 --cfg cfg/training/yolov7.yaml --name yolov7_first_training --hyp data/hyp.scratch.p5.yaml --epochs 300
 
-❎ Start Tensorboard Online Visualization: 
-tensorboard --logdir D:\UNIVERSITA\Magistrale\SecondoAnno\Tesi\code\yolov7\runs\train\yolov7 (⚠️seems to not be working)
-
 ❎ Test (⚠️considers validation set instead of test set):
 python3 test.py --data data/MTSD-fully_annotated/MTSD-fully_annotated.yaml --img 640 --batch 16 --conf 0.001 --iou 0.65 --device 0 --weights runs/train/yolov7_first_training3/weights/best.pt --name yolov7_640_val
 
-❎ Detect (either on directory or single image/video; it automatically saves results to runs/detect)
+❎ Detect on ORIGINAL REPO (either on directory or single image/video; it automatically saves results to runs/detect)
 python3 detect.py --weights runs/train/yolov7_first_training/weights/best.pt --conf 0.25 --img-size 640 --source data/new_data/signs_images
 
 ❎ Custom Detect
-python3 detect_custom.py --weights_s runs/train/yolov7_first_training/weights/best.pt --weights_a runs/train/yolov7_arrows_FS_640/weights/best.pt --conf 0.25 --img-size 640 --source data/new_data/signs_images --nosave --view-img
+python3 detect.py --weights_s runs/train/yolov7_first_training/weights/best.pt --weights_a runs/train/yolov7_arrows_FS_640/weights/best.pt --conf_thres_s 0.25 --conf_thres_s 0.50 --img-size 640 --source data/new_data/signs_images --nosave --view-img --fixed-colors
