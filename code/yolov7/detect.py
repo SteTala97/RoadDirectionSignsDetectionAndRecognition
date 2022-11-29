@@ -1,122 +1,243 @@
 import argparse
 import time
+import sys
+import os
+from json import dumps
 from pathlib import Path
 
-import cv2
+import cv2 as cv
 import torch
-import torch.backends.cudnn as cudnn
-from numpy import random
+from numpy import random, shape, copy, ascontiguousarray, sqrt, argmin
 
+import easyocr
+sys.path.insert(1, os.getcwd().replace("yolov7", "utilities"))
+from arrow_classification import classify_arrow
 from models.experimental import attempt_load
-from utils.datasets import LoadStreams, LoadImages
-from utils.general import check_img_size, check_requirements, check_imshow, non_max_suppression, apply_classifier, \
+from utils.datasets import LoadStreams, LoadImages, letterbox
+from utils.general import check_img_size, check_requirements, non_max_suppression, apply_classifier, \
     scale_coords, xyxy2xywh, strip_optimizer, set_logging, increment_path
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized, TracedModel
 
 
+
+def show_img(winname, img):
+    cv.namedWindow(winname, cv.WINDOW_GUI_EXPANDED)
+    cv.imshow(winname, img)
+    k = 0xff & cv.waitKey() # wait for keyboard input
+    if k == 27: # terminate execution with 'escape'
+        exit()
+    cv.destroyAllWindows()
+
+
+def remove_contained_dets(detections):
+    # remove eventual detections which are entirely contained inside another detection
+    rows_to_remove = []
+    for i in range(shape(detections)[0]):
+        xm, ym, xM, yM = int(detections[i, 0]), int(detections[i, 1]), int(detections[i, 2]), int(detections[i, 3])
+        for j in range(shape(detections)[0]):
+            if xm > int(detections[j, 0]) and ym > int(detections[j, 1]) and xM < int(detections[j, 2]) and yM < int(detections[j, 3]):
+                rows_to_remove.append(i)
+                break
+    # if there are detections inside other detections, remove them from "detections"
+    if len(rows_to_remove):
+        for idx in reversed(rows_to_remove):
+            detections = torch.cat((detections[:idx, :], detections[idx+1:, :]), axis=0)
+    return detections
+
+
+def prep_img(img, device, half):
+    # process the input image to make it a valid input for the .pt model
+    img = torch.from_numpy(img).to(device)
+    img = img.half() if half else img.float()  # uint8 to fp16/32
+    img /= 255.0  # 0 - 255 to 0.0 - 1.0
+    if img.ndimension() == 3:
+        img = img.unsqueeze(0)
+    return img
+
+
 def detect(save_img=False):
-    source, weights, view_img, save_txt, imgsz, trace = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size, not opt.no_trace
+    source, weights_s, weights_a, conf_thres_s, conf_thres_a, view_img, save_txt, imgsz, trace = \
+        opt.source, opt.weights_s, opt.weights_a, opt.conf_thres_s, opt.conf_thres_a, opt.view_img, opt.save_txt, opt.img_size, not opt.no_trace
     save_img = not opt.nosave and not source.endswith('.txt')  # save inference images
-    webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
-        ('rtsp://', 'rtmp://', 'http://', 'https://'))
 
     # Directories
     save_dir = Path(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))  # increment run
     (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
-    # Initialize
+    # Initialize OCR
+    reader = easyocr.Reader(['en', 'it'])
+
+    # Initialize detectors
     set_logging()
     device = select_device(opt.device)
     half = device.type != 'cpu'  # half precision only supported on CUDA
 
-    # Load model
-    model = attempt_load(weights, map_location=device)  # load FP32 model
-    stride = int(model.stride.max())  # model stride
+    # Load models
+    model_signs  = attempt_load(weights_s, map_location=device)
+    model_arrows = attempt_load(weights_a, map_location=device)
+    stride = int(model_signs.stride.max())  # model stride
     imgsz = check_img_size(imgsz, s=stride)  # check img_size
 
     if trace:
-        model = TracedModel(model, device, opt.img_size)
+        model_signs = TracedModel(model_signs, device, opt.img_size)
+        model_arrows = TracedModel(model_arrows, device, opt.img_size)
 
     if half:
-        model.half()  # to FP16
-
-    # Second-stage classifier
-    classify = False
-    if classify:
-        modelc = load_classifier(name='resnet101', n=2)  # initialize
-        modelc.load_state_dict(torch.load('weights/resnet101.pt', map_location=device)['model']).to(device).eval()
+        model_signs.half()  # to FP16
+        model_arrows.half()  # to FP16
 
     # Set Dataloader
     vid_path, vid_writer = None, None
-    if webcam:
-        view_img = check_imshow()
-        cudnn.benchmark = True  # set True to speed up constant image size inference
-        dataset = LoadStreams(source, img_size=imgsz, stride=stride)
-    else:
-        dataset = LoadImages(source, img_size=imgsz, stride=stride)
+    dataset_signs = LoadImages(source, img_size=imgsz, stride=stride)
 
     # Get names and colors
-    names = model.module.names if hasattr(model, 'module') else model.names
-    colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
+    names_signs = model_signs.module.names if hasattr(model_signs, 'module') else model_signs.names
+    if opt.fixed_colors:
+        colors_signs = [[60, 220, 0], [15, 45, 240]]
+        color_arrows = [5, 200, 180]
+        color_text = [250, 5, 250]
+    else:
+        colors_signs = [[random.randint(0, 255) for _ in range(3)] for _ in names_signs]
+        color_arrows = [random.randint(0, 255) for _ in range(3)]
+        color_text = [random.randint(0, 255) for _ in range(3)]
 
-    # Run inference
+    # Run inferences
     if device.type != 'cpu':
-        model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
+        model_signs(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model_signs.parameters())))  # run once
     old_img_w = old_img_h = imgsz
     old_img_b = 1
-
     t0 = time.time()
-    for path, img, im0s, vid_cap in dataset:
-        img = torch.from_numpy(img).to(device)
-        img = img.half() if half else img.float()  # uint8 to fp16/32
-        img /= 255.0  # 0 - 255 to 0.0 - 1.0
-        if img.ndimension() == 3:
-            img = img.unsqueeze(0)
-
+    for path, img, im0s, vid_cap in dataset_signs:
+        img = prep_img(img, device, half)
         # Warmup
         if device.type != 'cpu' and (old_img_b != img.shape[0] or old_img_h != img.shape[2] or old_img_w != img.shape[3]):
             old_img_b = img.shape[0]
             old_img_h = img.shape[2]
             old_img_w = img.shape[3]
             for i in range(3):
-                model(img, augment=opt.augment)[0]
+                model_signs(img, augment=opt.augment)[0]
 
-        # Inference
-        t1 = time_synchronized()
-        pred = model(img, augment=opt.augment)[0]
-        t2 = time_synchronized()
+        # Run inference to detect signs in input image(s)
+        # t1 = time_synchronized()
+        pred_signs = model_signs(img, augment=opt.augment)[0]
+        # t2 = time_synchronized()
 
         # Apply NMS
-        pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
-        t3 = time_synchronized()
+        pred_signs = non_max_suppression(pred_signs, conf_thres_s, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
+        # t3 = time_synchronized()
 
-        # Apply Classifier
-        if classify:
-            pred = apply_classifier(pred, modelc, img, im0s)
-
-        # Process detections
-        for i, det in enumerate(pred):  # detections per image
-            if webcam:  # batch_size >= 1
-                p, s, im0, frame = path[i], '%g: ' % i, im0s[i].copy(), dataset.count
-            else:
-                p, s, im0, frame = path, '', im0s, getattr(dataset, 'frame', 0)
+        # Process signs detections
+        for i, det_signs in enumerate(pred_signs):  # detections per image
+            p, s, im0, frame = path, '', im0s, getattr(dataset_signs, 'frame', 0)
 
             p = Path(p)  # to Path
             save_path = str(save_dir / p.name)  # img.jpg
-            txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
+            txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset_signs.mode == 'image' else f'_{frame}')  # img.txt
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
-            if len(det):
+            
+            if len(det_signs):
+                # Remove eventual signs detections which are completely contained inside other signs detections
+                det_signs = remove_contained_dets(det_signs)
                 # Rescale boxes from img_size to im0 size
-                det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
+                det_signs[:, :4] = scale_coords(img.shape[2:], det_signs[:, :4], im0.shape).round()
+
+                # Perform arrows detection and OCR on these regions of the input image
+                for i in range(shape(det_signs)[0]):
+                    # Dictionary to handle arrows and texts associations
+                    sign_info = {}
+                    # Dictionary to handle direction and image coordinates of each arrow
+                    arrows = {}
+                    # Dictionary to handle content and image coordinates of the text detected on the sign
+                    texts = {}
+
+                    # Get the detected sign patch from the original image and process it to make it a valid input for the model
+                    xm, ym, xM, yM = int(det_signs[i, 0]), int(det_signs[i, 1]), int(det_signs[i, 2]), int(det_signs[i, 3])
+                    img_sign0 = im0[ym:yM, xm:xM, :] # original sign patch
+                    img_sign = letterbox(img_sign0, imgsz, stride)[0]
+                    img_sign = img_sign[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, HxWxCH to CHxHxW
+                    img_sign = ascontiguousarray(img_sign)
+                    img_sign = prep_img(img_sign, device, half)
+
+                    # Run inference to detect eventual arrows
+                    pred_arrows = model_arrows(img_sign, augment=opt.augment)[0]
+                    pred_arrows = non_max_suppression(pred_arrows, conf_thres_a, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
+                    # Run inference to detect eventual writings
+                    pred_writings = reader.readtext(img_sign0)
+
+                    # Check for arrows and text inside the detected signs
+                    is_directional = not(int(det_signs[i, 5])) # '0' = direction-or-information, '1' = other
+                    arrows_check = False
+                    writings_check = False
+
+                    # Check for arrows
+                    if len(pred_arrows[0]):
+                        arrows_check = True
+
+                    # Check for writings
+                    if len(pred_writings):
+                        writings_check = True
+
+                    # Adjust the labels if necessary
+                    if not(is_directional) and arrows_check and writings_check:
+                        det_signs[i, 5] = 0.0 # 'other' -> 'direction-or-information'
+                    elif is_directional and (not(arrows_check) or not(writings_check)):
+                        det_signs[i, 5] = 1.0 # 'direction-or-information' -> 'other'
+                    is_directional = not(int(det_signs[i, 5]))
+
+                    # Compose the informations found in the current directional sign
+                    if is_directional:
+                        # temp = 0 # TODO: remove this line ⚠️
+                        # ARROWS #
+                        for _, det_arrows in enumerate(pred_arrows):
+                            # Rescale boxes from img_sign to img_sign0 size
+                            det_arrows[:, :4] = scale_coords(img_sign.shape[2:], det_arrows[:, :4], img_sign0.shape).round()
+                            # Get arrow image patch and classify its direction
+                            for *xyxy, conf, cls in reversed(det_arrows):
+                                marginx = (xyxy[2] - xyxy[0]) * .1
+                                marginy = (xyxy[3] - xyxy[1]) * .1
+                                up    = int(max(0, xyxy[1]-marginy))
+                                down  = int(min(img_sign0.shape[0], xyxy[3]+marginy))
+                                left  = int(max(0, xyxy[0]-marginx))
+                                right = int(min(img_sign0.shape[1], xyxy[2]+marginx))
+                                arrow_img = img_sign0[up:down, left:right, :]
+                                direction = classify_arrow(arrow_img)
+                                arrows[direction] = (left + (right - left) // 2), (up + (down - up) // 2) # store the center of the arrow bbox
+                                sign_info[direction] = [] # initialize empty list as text info "pointed" by the current arrow
+                                # cv.circle(img_sign0, arrows[direction], 10, (0, 255, 0), 2)
+                                # label = f'arrow {conf:.2f}'
+                                # print(f'ARROW DETECTION CONFIDENCE: {conf:.2f}')
+                                # plot_one_box(xyxy, img_sign0, label=label, color=color_arrows, line_thickness=1)
+                                # cv.imwrite(save_path[:-4]+str(temp)+'.jpg', arrow_img) # TODO: remove this line ⚠️
+                                # temp += 1 # TODO: remove this line ⚠️
+                        # TEXT #
+                        for writing in pred_writings:
+                            label = f'{writing[1]} {writing[2]:.2f}'
+                            texts[writing[1]] = (writing[0][0][0] + (writing[0][2][0] - writing[0][0][0]) // 2), \
+                                                (writing[0][0][1] + (writing[0][2][1] - writing[0][0][1]) // 2) # store the center of the text bbox
+                            # cv.circle(img_sign0, (int(texts[writing[1]][0]), int(texts[writing[1]][1])), 10, (0, 0, 255), 2)
+                            # text_coords = [writing[0][0][0], writing[0][0][1], writing[0][2][0], writing[0][2][1]] # [xm, ym, xM, yM] of the text detected
+                            # plot_one_box(text_coords, img_sign0, label=label, color=color_text, line_thickness=1)
+                            # print(label)
+                        # Associate each text to the closest arrow
+                        if len(arrows) == 1 and len(texts) == 1: # if there are only one arrow and one text, composing the output is trivial
+                            sign_info[list(arrows.keys())[0]] = list(texts.keys())[0]
+                        else:                                    # else, associate each text to the closest arrow
+                            for text in texts:
+                                distances = [sqrt((arrows[arrow][0] - texts[text][0])**2 + (arrows[arrow][1] - texts[text][1])**2) for arrow in arrows]
+                                sign_info[list(arrows.keys())[argmin(distances)]].append(text)
+                        
+                        print(dumps(sign_info, ensure_ascii=False))
+
+                print(f" Image {p.name} done.\n")
 
                 # Print results
-                for c in det[:, -1].unique():
-                    n = (det[:, -1] == c).sum()  # detections per class
-                    s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
+                for c in det_signs[:, -1].unique():
+                    n = (det_signs[:, -1] == c).sum()  # detections per class
+                    s += f"{n} {names_signs[int(c)]}{'s' * (n > 1)}, "  # add to string
 
                 # Write results
-                for *xyxy, conf, cls in reversed(det):
+                for *xyxy, conf, cls in reversed(det_signs):
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
@@ -124,50 +245,54 @@ def detect(save_img=False):
                             f.write(('%g ' * len(line)).rstrip() % line + '\n')
 
                     if save_img or view_img:  # Add bbox to image
-                        label = f'{names[int(cls)]} {conf:.2f}'
-                        plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=1)
+                        label = f'{names_signs[int(cls)]} {conf:.2f}'
+                        plot_one_box(xyxy, im0, label=label, color=colors_signs[int(cls)], line_thickness=1)
 
-            # Print time (inference + NMS)
-            print(f'{s}Done. ({(1E3 * (t2 - t1)):.1f}ms) Inference, ({(1E3 * (t3 - t2)):.1f}ms) NMS')
+            # # Print time (inference + NMS)
+            # print(f'{s}Done. ({(1E3 * (t2 - t1)):.1f}ms) Inference, ({(1E3 * (t3 - t2)):.1f}ms) NMS')
 
             # Stream results
             if view_img:
-                cv2.imshow(str(p), im0)
-                cv2.waitKey(1)  # 1 millisecond
+                show_img(str(p), im0)
 
             # Save results (image with detections)
             if save_img:
-                if dataset.mode == 'image':
-                    cv2.imwrite(save_path, im0)
+                if dataset_signs.mode == 'image':
+                    cv.imwrite(save_path, im0)
                     print(f" The image with the result is saved in: {save_path}")
                 else:  # 'video' or 'stream'
                     if vid_path != save_path:  # new video
                         vid_path = save_path
-                        if isinstance(vid_writer, cv2.VideoWriter):
+                        if isinstance(vid_writer, cv.VideoWriter):
                             vid_writer.release()  # release previous video writer
                         if vid_cap:  # video
-                            fps = vid_cap.get(cv2.CAP_PROP_FPS)
-                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                            fps = vid_cap.get(cv.CAP_PROP_FPS)
+                            w = int(vid_cap.get(cv.CAP_PROP_FRAME_WIDTH))
+                            h = int(vid_cap.get(cv.CAP_PROP_FRAME_HEIGHT))
                         else:  # stream
                             fps, w, h = 30, im0.shape[1], im0.shape[0]
                             save_path += '.mp4'
-                        vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+                        vid_writer = cv.VideoWriter(save_path, cv.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer.write(im0)
+
 
     if save_txt or save_img:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
         print(f"Results saved to {save_dir}{s}")
 
     print(f'Done. ({time.time() - t0:.3f}s)')
+    print("\nDone.\n")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default='yolov7.pt', help='model.pt path(s)')
-    parser.add_argument('--source', type=str, default='inference/images', help='source')  # file/folder, 0 for webcam
+    parser.add_argument('--weights_s', type=str, default='yolov7.pt', help='model.pt path(s)') # signs detection
+    parser.add_argument('--weights_a', type=str, default='yolov7.pt', help='model.pt path(s)') # arrows detection
+    parser.add_argument('--fixed-colors', action='store_true', help='use fixed colors instead of random ones')
+    parser.add_argument('--source', type=str, default='inference/images', help='source')
     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
-    parser.add_argument('--conf-thres', type=float, default=0.25, help='object confidence threshold')
+    parser.add_argument('--conf_thres_s', type=float, default=0.25, help='object confidence threshold for signs')
+    parser.add_argument('--conf_thres_a', type=float, default=0.25, help='object confidence threshold for arrows')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--view-img', action='store_true', help='display results')
