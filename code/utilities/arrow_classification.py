@@ -209,23 +209,23 @@ def classify_arrow(img):
 	rot_tollerance = 20 # this is approximately half of the amplitude of an orientation interval (which is 45°)
 	if abs(orientation) > 70 and abs(orientation) < 110:
 		if mask_points_up:
-			direction_res = "↓" if abs(total_rotation) > (90 + rot_tollerance) else "↑"
+			direction_res = "down" if abs(total_rotation) > (90 + rot_tollerance) else "up"
 		else:
-			direction_res = "↑" if abs(total_rotation) > (90 + rot_tollerance) else "↓"
+			direction_res = "up" if abs(total_rotation) > (90 + rot_tollerance) else "down"
 	elif abs(orientation) > 155 or abs(orientation) < 25:
 		if mask_points_up:
-			direction_res = "←" if abs(total_rotation) > (90 + rot_tollerance) else "→"
+			direction_res = "left" if abs(total_rotation) > (90 + rot_tollerance) else "right"
 		else:
-			direction_res = "→" if abs(total_rotation) > (90 + rot_tollerance) else "←"
+			direction_res = "right" if abs(total_rotation) > (90 + rot_tollerance) else "left"
 	elif orientation >= 25 and orientation <= 65 or orientation <= -115 and orientation >= -155 or orientation >= 205 and orientation <= 245:
 		if mask_points_up:
-			direction_res = "↙" if abs(total_rotation) > (90 + rot_tollerance) else "↗"
+			direction_res = "south-west" if abs(total_rotation) > (90 + rot_tollerance) else "north-east"
 		else:
-			direction_res = "↗" if abs(total_rotation) > (90 + rot_tollerance) else "↙"
+			direction_res = "north-east" if abs(total_rotation) > (90 + rot_tollerance) else "south-west"
 	else:
 		if mask_points_up:
-			direction_res = "↘" if abs(total_rotation) > (90 + rot_tollerance) else "↖"
+			direction_res = "south-east" if abs(total_rotation) > (90 + rot_tollerance) else "north-west"
 		else:
-			direction_res = "↖" if abs(total_rotation) > (90 + rot_tollerance) else "↘"
+			direction_res = "north-west" if abs(total_rotation) > (90 + rot_tollerance) else "south-east"
 
 	return direction_res
