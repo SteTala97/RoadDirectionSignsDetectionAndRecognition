@@ -95,12 +95,8 @@ def classify_arrow(img):
 	maxarea = max(areas)
 	maxlabel = np.argmax(areas)
 	arrow_mask = (labels == maxlabel).astype(np.uint8) * 255
-	# Check if the CC intersects the "central patch" of the image, otherwise take the max CC from the inverse of the binary mask;
-	# the "central patch" is a centered patch that spans n_rows/10 and n_cols/10 pixels in both directions
-	# rows_patch = r // 10 if (r // 20) > 0 else 1
-	# cols_patch = c // 10 if (c // 20) > 0 else 1
-	# if np.sum(arrow_mask[r//2-rows_patch:r//2+rows_patch, c//2-cols_patch:c//2+cols_patch]) == 0:
-	if arrow_mask[r//2, c//2] == 0: # check only for the central pixel
+	# Check if the binary region intersects the center of the image
+	if arrow_mask[r//2, c//2] == 0:
 		# Connected components analysis on inverted thresholded image 
 		img_th_inv = 255 - img_th
 		numLabels, labels, stats, centroid_inv = cv.connectedComponentsWithStats(img_th_inv, 4, cv.CV_32S)
@@ -158,26 +154,28 @@ def classify_arrow(img):
 	height = most_symmetryc_img.shape[0]
 	width = most_symmetryc_img.shape[1]
 	half_width = width // 2 - 1
+	skip_counter = 0 # counter used to "skip" a certain number of rows (see below in the nested for loop)
 	for row in range(height):
 		# While iterating through each row, "fill the empty space" between two specular white pixels
 		l_flag = r_flag = False
 		r_px = l_px = 0
-		for col in range(half_width):
-			if not(l_flag) and most_symmetryc_img[row, col] > 0:
-				l_flag = True
-				l_px = col
-			if not(r_flag) and most_symmetryc_img[row, width-col-1] > 0:
-				r_flag = True
-				r_px = width-col-1
-			if l_flag and r_flag:
-				most_symmetryc_img[row, l_px:r_px] = 255
-				break
+		if skip_counter == 3: # perform the following only each 3 rows
+			skip_counter = 0
+			for col in range(half_width):
+				if not(l_flag) and most_symmetryc_img[row, col] > 0:
+					l_flag = True
+					l_px = col
+				if not(r_flag) and most_symmetryc_img[row, width-col-1] > 0:
+					r_flag = True
+					r_px = width-col-1
+				if l_flag and r_flag:
+					most_symmetryc_img[row, l_px:r_px] = 255
+					break
 		# Now sum the current row
 		hist.append(np.sum(most_symmetryc_img[row, :]))
-	max_ = max(hist)
-	nhist = [float(x) / max_ for x in hist] # normalized histogram
-	w = 7 if len(nhist) > 100 else 3
-	nhist = np.convolve(nhist, np.ones(w), 'valid') / w # smoothed histogram
+
+	w = 9 if len(hist) > 100 else 3
+	hist = np.convolve(hist, np.ones(w), 'valid') / w # smoothed histogram
 
 	# Get the portion of plot with the longest ascending slope (the bottom part is reversed to be compared with the top one)
 	slopes_top = {}
@@ -186,15 +184,15 @@ def classify_arrow(img):
 	key_bottom = 0
 	slopes_top[key_top] = 0
 	slopes_bottom[key_bottom] = 0
-	len_nhist = len(nhist)
-	len_nhist_halved = len_nhist // 2
-	for i in range(1, len_nhist_halved):
-		if nhist[i] > nhist[i-1]:
+	len_hist = len(hist)
+	len_hist_halved = len_hist // 2
+	for i in range(1, len_hist_halved):
+		if hist[i] > hist[i-1]:
 			slopes_top[key_top] += 1
 		else:
 			key_top += 1
 			slopes_top[key_top] = 0
-		if nhist[len_nhist - i - 1] > nhist[len_nhist - i]:
+		if hist[len_hist - i - 1] > hist[len_hist - i]:
 			slopes_bottom[key_bottom] += 1
 		else:
 			key_bottom += 1
