@@ -2,7 +2,6 @@ import argparse
 import time
 import sys
 import os
-from json import dumps
 from pathlib import Path
 
 import cv2 as cv
@@ -110,13 +109,13 @@ def detect(save_img=False):
     t0 = time.time()
     for path, img, im0s, vid_cap in dataset_signs:
         img = prep_img(img, device, half)
-        # Warmup
-        if device.type != 'cpu' and (old_img_b != img.shape[0] or old_img_h != img.shape[2] or old_img_w != img.shape[3]):
-            old_img_b = img.shape[0]
-            old_img_h = img.shape[2]
-            old_img_w = img.shape[3]
-            for i in range(3):
-                model_signs(img, augment=opt.augment)[0]
+        # # Warmup (used only to calculate inference time)
+        # if device.type != 'cpu' and (old_img_b != img.shape[0] or old_img_h != img.shape[2] or old_img_w != img.shape[3]):
+        #     old_img_b = img.shape[0]
+        #     old_img_h = img.shape[2]
+        #     old_img_w = img.shape[3]
+        #     for i in range(3):
+        #         model_signs(img, augment=opt.augment)[0]
 
         # Run inference to detect signs in input image(s)
         # t1 = time_synchronized()
@@ -162,21 +161,19 @@ def detect(save_img=False):
                     # Run inference to detect eventual arrows
                     pred_arrows = model_arrows(img_sign, augment=opt.augment)[0]
                     pred_arrows = non_max_suppression(pred_arrows, conf_thres_a, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
-                    # Run inference to detect eventual writings
-                    pred_writings = reader.readtext(img_sign0)
 
                     # Check for arrows and text inside the detected signs
                     is_directional = not(int(det_signs[i, 5])) # '0' = direction-or-information, '1' = other
                     arrows_check = False
                     writings_check = False
-
                     # Check for arrows
                     if len(pred_arrows[0]):
                         arrows_check = True
-
-                    # Check for writings
-                    if len(pred_writings):
-                        writings_check = True
+                        # Run inference to detect eventual writings (OCR)
+                        pred_writings = reader.readtext(img_sign0)
+                        # Check for writings
+                        if len(pred_writings):
+                            writings_check = True
 
                     # Adjust the labels if necessary
                     if not(is_directional) and arrows_check and writings_check:
@@ -187,7 +184,7 @@ def detect(save_img=False):
 
                     # Compose the informations found in the current directional sign
                     if is_directional:
-                        # temp = 0 # TODO: remove this line ⚠️
+                        # temp = 0 # needed to save arrows images
                         # ARROWS #
                         for _, det_arrows in enumerate(pred_arrows):
                             # Rescale boxes from img_sign to img_sign0 size
@@ -202,22 +199,25 @@ def detect(save_img=False):
                                 right = int(min(img_sign0.shape[1], xyxy[2]+marginx))
                                 arrow_img = img_sign0[up:down, left:right, :]
                                 direction = classify_arrow(arrow_img)
-                                arrows[direction] = (left + (right - left) // 2), (up + (down - up) // 2) # store the center of the arrow bbox
-                                sign_info[direction] = [] # initialize empty list as text info "pointed" by the current arrow
-                                # cv.circle(img_sign0, arrows[direction], 10, (0, 255, 0), 2)
+                                # store the center of the arrow bbox
+                                arrows[direction] = (left + (right - left) // 2), (up + (down - up) // 2) 
+                                # initialize empty list as text info "pointed" by the current arrow
+                                sign_info[direction] = [] 
                                 # label = f'arrow {conf:.2f}'
-                                # print(f'ARROW DETECTION CONFIDENCE: {conf:.2f}')
-                                # plot_one_box(xyxy, img_sign0, label=label, color=color_arrows, line_thickness=1)
-                                # cv.imwrite(save_path[:-4]+str(temp)+'.jpg', arrow_img) # TODO: remove this line ⚠️
-                                # temp += 1 # TODO: remove this line ⚠️
+                                # Draw arrows detection and classification results on image
+                                plot_one_box(xyxy, img_sign0, label=direction, color=color_arrows, line_thickness=1)
+                                # cv.imwrite(save_path[:-4]+str(temp)+'.jpg', arrow_img) # needed to save arrows images
+                                # temp += 1 # needed to save arrows images
                         # TEXT #
                         for writing in pred_writings:
                             label = f'{writing[1]} {writing[2]:.2f}'
+                            # store the center of the text bbox
                             texts[writing[1]] = (writing[0][0][0] + (writing[0][2][0] - writing[0][0][0]) // 2), \
-                                                (writing[0][0][1] + (writing[0][2][1] - writing[0][0][1]) // 2) # store the center of the text bbox
-                            # cv.circle(img_sign0, (int(texts[writing[1]][0]), int(texts[writing[1]][1])), 10, (0, 0, 255), 2)
-                            # text_coords = [writing[0][0][0], writing[0][0][1], writing[0][2][0], writing[0][2][1]] # [xm, ym, xM, yM] of the text detected
-                            # plot_one_box(text_coords, img_sign0, label=label, color=color_text, line_thickness=1)
+                                                (writing[0][0][1] + (writing[0][2][1] - writing[0][0][1]) // 2) 
+                            # get [xm, ym, xM, yM] of the detected text
+                            text_coords = [writing[0][0][0], writing[0][0][1], writing[0][2][0], writing[0][2][1]] 
+                            # Draw OCR results on image
+                            plot_one_box(text_coords, img_sign0, label=label, color=color_text, line_thickness=1) 
                             # print(label)
                         # Associate each text to the closest arrow
                         if len(arrows) == 1 and len(texts) == 1: # if there are only one arrow and one text, composing the output is trivial
@@ -226,8 +226,15 @@ def detect(save_img=False):
                             for text in texts:
                                 distances = [sqrt((arrows[arrow][0] - texts[text][0])**2 + (arrows[arrow][1] - texts[text][1])**2) for arrow in arrows]
                                 sign_info[list(arrows.keys())[argmin(distances)]].append(text)
+                                ctr_arrow = arrows[list(arrows.keys())[argmin(distances)]]
+                                ctr_arrow = (int(ctr_arrow[0]), int(ctr_arrow[1]))
+                                ctr_text = texts[text]
+                                ctr_text = (int(ctr_text[0]), int(ctr_text[1]))
+                                # Draw a red line that connects text and arrows on image
+                                cv.line(img_sign0, ctr_arrow, ctr_text, (0, 0, 255), 2) 
                         
-                        print(dumps(sign_info, ensure_ascii=False))
+                        for k in sign_info.keys():
+                            print(f'\n {k}: {sign_info[k]}')
 
                 print(f" Image {p.name} done.\n")
 
@@ -246,10 +253,8 @@ def detect(save_img=False):
 
                     if save_img or view_img:  # Add bbox to image
                         label = f'{names_signs[int(cls)]} {conf:.2f}'
-                        plot_one_box(xyxy, im0, label=label, color=colors_signs[int(cls)], line_thickness=1)
-
-            # # Print time (inference + NMS)
-            # print(f'{s}Done. ({(1E3 * (t2 - t1)):.1f}ms) Inference, ({(1E3 * (t3 - t2)):.1f}ms) NMS')
+                        # Draw signs detection results on image
+                        plot_one_box(xyxy, im0, label=label, color=colors_signs[int(cls)], line_thickness=1) 
 
             # Stream results
             if view_img:
@@ -286,14 +291,14 @@ def detect(save_img=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights_s', type=str, default='yolov7.pt', help='model.pt path(s)') # signs detection
-    parser.add_argument('--weights_a', type=str, default='yolov7.pt', help='model.pt path(s)') # arrows detection
+    parser.add_argument('--weights_s', type=str, default='yolov7.pt', help='model.pt path(s)') # model for signs detection
+    parser.add_argument('--weights_a', type=str, default='yolov7.pt', help='model.pt path(s)') # model arrows detection
     parser.add_argument('--fixed-colors', action='store_true', help='use fixed colors instead of random ones')
     parser.add_argument('--source', type=str, default='inference/images', help='source')
     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
-    parser.add_argument('--conf_thres_s', type=float, default=0.25, help='object confidence threshold for signs')
-    parser.add_argument('--conf_thres_a', type=float, default=0.25, help='object confidence threshold for arrows')
-    parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
+    parser.add_argument('--conf_thres_s', type=float, default=.25, help='object confidence threshold for signs detection')
+    parser.add_argument('--conf_thres_a', type=float, default=.50, help='object confidence threshold for arrows detection')
+    parser.add_argument('--iou-thres', type=float, default=.45, help='IOU threshold for NMS')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--view-img', action='store_true', help='display results')
     parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
