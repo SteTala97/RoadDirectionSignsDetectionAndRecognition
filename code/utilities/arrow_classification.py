@@ -86,7 +86,6 @@ def classify_arrow(img):
 	img_blur = cv.GaussianBlur(img, (5, 5), 0)
 	img_gray = cv.cvtColor(img_blur, cv.COLOR_BGR2GRAY)
 	img_th = cv.threshold(img_gray, 0, 255, cv.THRESH_OTSU)[1]
-	# img_th = apply_morfology(img_th)
 
 	# Connected components analysis on thresholded image
 	numLabels, labels, stats, centroid = cv.connectedComponentsWithStats(img_th, 4, cv.CV_32S)
@@ -95,8 +94,7 @@ def classify_arrow(img):
 	maxarea = max(areas)
 	maxlabel = np.argmax(areas)
 	arrow_mask = (labels == maxlabel).astype(np.uint8) * 255
-	# Check if the binary region intersects the center of the image
-	if arrow_mask[r//2, c//2] == 0:
+	if not(arrow_mask[r//2, c//2]):
 		# Connected components analysis on inverted thresholded image 
 		img_th_inv = 255 - img_th
 		numLabels, labels, stats, centroid_inv = cv.connectedComponentsWithStats(img_th_inv, 4, cv.CV_32S)
@@ -111,43 +109,45 @@ def classify_arrow(img):
 	angle, res, cntr = getOrientation(contours[0], arrow_mask, img)
 	theta = int(-(angle / np.pi * 180)) # rad to deg (and invert the sign)
 
+	# Bring the angle in the range [0, 360] if not already so
+	theta = 360 + theta if theta < 0 else theta
+
+	# Set the increment to keep each of the four directions in the range [0, 360]
+	increment = 45 if theta < 135 else -45
+
 	# Rotate the arrow mask according to the two vectors to allign the arrow vertically
-	angle_eig1 = -theta + 90 # angle that alligns the first eigenvector
+	og_angle_eig1 = theta
+	angle_eig1 = 90 - theta # angle that alligns the first eigenvector
 	mask_eig1, diff_eig1 = check_symmetry(arrow_mask, angle_eig1)
-	angle_eig2 = -theta     # angle that alligns the second eigenvector
+	og_angle_eig2 = theta + increment * 2
+	angle_eig2 = 90 - og_angle_eig2 # angle that alligns the second eigenvector
 	mask_eig2, diff_eig2 = check_symmetry(arrow_mask, angle_eig2)
 
 	# Consider also that the shape of the arrow may "trick" the PCA and give a 45° angle shift
-	angle_eig1_45pos = angle_eig1 - 45 # rotate the first eigenvector 45° less (this is the vector at +45° from the eigenvector1)
-	mask_eig1_45pos, diff_eig1_45pos = check_symmetry(arrow_mask, angle_eig1_45pos)
-	angle_eig1_45neg = angle_eig1 + 45 # rotate the first eigenvector 45° more (this is the vector at -45° from the eigenvector1)
-	mask_eig1_45neg, diff_eig1_45neg = check_symmetry(arrow_mask, angle_eig1_45neg)
+	og_angle_45_1 = theta + increment
+	angle_45_1 = 90 - og_angle_45_1 # rotate the first eigenvector 45° less (this is the vector at +45° from the eigenvector1)
+	mask_45_1, diff_eig1_45pos = check_symmetry(arrow_mask, angle_45_1)
+	og_angle_45_2 = theta + increment * 3
+	angle_45_2 = 90 - og_angle_45_2 # rotate the first eigenvector 45° more (this is the vector at -45° from the eigenvector1)
+	mask_45_2, diff_eig1_45neg = check_symmetry(arrow_mask, angle_45_2)
 
 	# Get the most symmetric image rotation
 	if diff_eig1 < diff_eig2 and diff_eig1 < diff_eig1_45pos and diff_eig1 < diff_eig1_45neg:               # mask_eig1
-		orientation        = theta
-		total_rotation     = angle_eig1
+		orientation        = og_angle_eig1 # original orientation
+		total_rotation     = angle_eig1 # rotation applied to allign the mask vertically
 		most_symmetryc_img = mask_eig1
-		color_eig1         = (0, 255, 0)
-		color_eig2 = color_eig45 = color_eig135 = (0, 0, 255)
 	elif diff_eig2 < diff_eig1 and diff_eig2 < diff_eig1_45pos and diff_eig2 < diff_eig1_45neg:             # mask_eig2
-		orientation        = theta + 90
-		total_rotation     = angle_eig2
+		orientation        = og_angle_eig2 # original orientation
+		total_rotation     = angle_eig2 # rotation applied to allign the mask vertically
 		most_symmetryc_img = mask_eig2
-		color_eig2         = (0, 255, 0)
-		color_eig1 = color_eig45 = color_eig135 = (0, 0, 255)
-	elif diff_eig1_45pos < diff_eig2 and diff_eig1_45pos < diff_eig1 and diff_eig1_45pos < diff_eig1_45neg: # mask_eig1_45pos
-		orientation        = theta + 45
-		total_rotation     = angle_eig1_45pos
-		most_symmetryc_img = mask_eig1_45pos
-		color_eig45        = (0, 255, 0)
-		color_eig2 = color_eig1 = color_eig135 = (0, 0, 255)
-	else:																				                    # mask_eig1_45neg
-		orientation        = theta - 45
-		total_rotation     = angle_eig1_45neg
-		most_symmetryc_img = mask_eig1_45neg
-		color_eig135       = (0, 255, 0)
-		color_eig2 = color_eig45 = color_eig1 = (0, 0, 255)
+	elif diff_eig1_45pos < diff_eig2 and diff_eig1_45pos < diff_eig1 and diff_eig1_45pos < diff_eig1_45neg: # mask_45_1
+		orientation        = og_angle_45_1 # original orientation
+		total_rotation     = angle_45_1 # rotation applied to allign the mask vertically
+		most_symmetryc_img = mask_45_1
+	else:																				                    # mask_45_2
+		orientation        = og_angle_45_2 # original orientation
+		total_rotation     = angle_45_2 # rotation applied to allign the mask vertically
+		most_symmetryc_img = mask_45_2
 
 	# Histogram of sum of rows
 	hist = []
@@ -156,9 +156,10 @@ def classify_arrow(img):
 	half_width = width // 2 - 1
 	skip_counter = 0 # counter used to "skip" a certain number of rows (see below in the nested for loop)
 	for row in range(height):
-		# While iterating through each row, "fill the empty space" between two specular white pixels
+		# While iterating through each line, "fill the empty space" between two specular white pixels
 		l_flag = r_flag = False
 		r_px = l_px = 0
+		skip_counter += 1
 		if skip_counter == 3: # perform the following only each 3 rows
 			skip_counter = 0
 			for col in range(half_width):
@@ -199,31 +200,32 @@ def classify_arrow(img):
 			slopes_bottom[key_bottom] = 0
 
 	if max(slopes_top.values()) > max(slopes_bottom.values()):
-		mask_points_up = True
+		mask_direction = "up"
 	else:
-		mask_points_up = False
+		mask_direction = "down"
 
-	# Infer orientation
-	rot_tollerance = 20 # this is approximately half of the amplitude of an orientation interval (which is 45°)
-	if abs(orientation) > 70 and abs(orientation) < 110:
-		if mask_points_up:
-			direction_res = "down" if abs(total_rotation) > (90 + rot_tollerance) else "up"
-		else:
-			direction_res = "up" if abs(total_rotation) > (90 + rot_tollerance) else "down"
-	elif abs(orientation) > 155 or abs(orientation) < 25:
-		if mask_points_up:
-			direction_res = "left" if abs(total_rotation) > (90 + rot_tollerance) else "right"
-		else:
-			direction_res = "right" if abs(total_rotation) > (90 + rot_tollerance) else "left"
-	elif orientation >= 25 and orientation <= 65 or orientation <= -115 and orientation >= -155 or orientation >= 205 and orientation <= 245:
-		if mask_points_up:
-			direction_res = "south-west" if abs(total_rotation) > (90 + rot_tollerance) else "north-east"
-		else:
-			direction_res = "north-east" if abs(total_rotation) > (90 + rot_tollerance) else "south-west"
+	# Determine the angle of the orientation; if needed, invert the angle with respect to the goniometric circumference
+	if mask_direction == "up":
+		vertex_orientation = orientation
 	else:
-		if mask_points_up:
-			direction_res = "south-east" if abs(total_rotation) > (90 + rot_tollerance) else "north-west"
-		else:
-			direction_res = "north-west" if abs(total_rotation) > (90 + rot_tollerance) else "south-east"
+		vertex_orientation = orientation+180 if orientation < 180 else orientation-180
+
+	# Discretize the result into the 8 directions considered
+	if vertex_orientation > 338 or vertex_orientation < 22: # "right" direction
+		direction_res = "right"
+	elif vertex_orientation >= 22 and vertex_orientation <= 68: # "north-east" direction
+		direction_res = "north-east"
+	elif vertex_orientation > 68 and vertex_orientation < 112: # "up" direction
+		direction_res = "up"
+	elif vertex_orientation >= 112 and vertex_orientation <= 158: # "north-west" direction
+		direction_res = "north-west"
+	elif vertex_orientation > 158 and vertex_orientation < 202: # "left" direction
+		direction_res = "left"
+	elif vertex_orientation >= 202 and vertex_orientation <= 248: # "south-west" direction
+		direction_res = "south-west"
+	elif vertex_orientation > 248 and vertex_orientation < 292: # "down" direction
+		direction_res = "down"
+	elif vertex_orientation >= 292 and vertex_orientation <= 338: # "south-east" direction
+		direction_res = "south-east"
 
 	return direction_res
